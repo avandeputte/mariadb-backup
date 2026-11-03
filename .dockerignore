@@ -1,0 +1,13 @@
+.git
+.github
+.gitignore
+.dockerignore
+dist/
+shots/
+tests/
+proxmox/
+packaging/
+install.sh
+docker-compose.yml
+**/__pycache__/
+**/*.pyc

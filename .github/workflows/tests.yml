@@ -1,0 +1,65 @@
+name: Tests
+
+# Unit tests, then a full backup/restore round trip against real MariaDB
+# servers (the current LTS and the newest release), then the web UI driven
+# by a browser.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mariadb: ["10.11", "11.8"]
+    services:
+      db:
+        image: mariadb:${{ matrix.mariadb }}
+        env:
+          MARIADB_ROOT_PASSWORD: rootpw
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Client tools and Python dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q mariadb-client python3-flask python3-requests python3-waitress
+          mariadb --version
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Backup and restore round trip
+        env:
+          MBM_DB_HOST: 127.0.0.1
+          MBM_DB_PORT: "3306"
+          MBM_DB_USER: root
+          MBM_DB_PASSWORD: rootpw
+        run: tests/integration.sh
+
+      - name: Web UI end to end
+        run: |
+          set -eu
+          mariadb -h 127.0.0.1 -uroot -prootpw < tests/fixture.sql
+          mkdir -p /tmp/mbmdata
+          MBM_DATA_DIR=/tmp/mbmdata MBM_ADMIN_PASSWORD=testpass123 python3 app.py > /tmp/mbm.log 2>&1 &
+          for i in $(seq 20); do curl -fs -o /dev/null http://127.0.0.1:8090/api/whoami && break; sleep 1; done
+          npm install --no-save playwright@1.48.2 >/dev/null
+          npx playwright install --with-deps chromium >/dev/null
+          MBM_PW=testpass123 DB_USER=root DB_PW=rootpw SHOTS=shots node tests/e2e.js || { cat /tmp/mbm.log; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ matrix.mariadb }}
+          path: shots/
+          retention-days: 14

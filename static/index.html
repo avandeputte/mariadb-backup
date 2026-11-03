@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MariaDB Backup Manager</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#17242a">
+<link rel="stylesheet" href="/static/v/__VERSION__/css/app.css">
+<script>
+(function(){try{
+  var want=localStorage.getItem("mbm_theme")||"system";
+  var dark=want==="dark"||(want==="system"&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme=dark?"dark":"light";
+}catch(e){}})();
+</script>
+</head>
+<body>
+<div id="scrim"></div>
+<aside id="nav">
+  <div class="brand"><img src="/static/favicon.svg" alt="" width="26" height="26">
+    <span>mariadb<br><span class="brand2">backup manager</span></span></div>
+  <nav id="navlinks">
+    <a href="#overview" data-page="overview">Overview</a>
+    <a href="#jobs" data-page="jobs">Backup jobs</a>
+    <a href="#backups" data-page="backups">Backups &amp; restore</a>
+    <a href="#activity" data-page="activity">Activity</a>
+    <div class="navhead">Setup</div>
+    <a href="#servers" data-page="servers">Servers</a>
+    <a href="#destinations" data-page="destinations">Destinations</a>
+    <a href="#settings" data-page="settings">Settings</a>
+  </nav>
+  <div class="foot"><span id="whofoot"></span><br><span id="verfoot"></span></div>
+</aside>
+<div id="main">
+  <div id="topbar">
+    <button id="navtoggle" aria-label="Menu"><span></span><span></span><span></span></button>
+    <h1 id="pagetitle">Overview</h1>
+    <div id="busy" hidden><span class="dot"></span> working</div>
+  </div>
+  <div id="content"></div>
+</div>
+
+<div id="login" hidden>
+  <form id="loginbox">
+    <h2 id="logintitle">Sign in</h2>
+    <p class="hint" id="loginintro">MariaDB Backup Manager</p>
+    <label for="lu">Username</label>
+    <input id="lu" name="username" autocomplete="username" autofocus>
+    <label for="lp">Password</label>
+    <input id="lp" name="password" type="password" autocomplete="current-password">
+    <div id="lp2wrap" hidden>
+      <label for="lp2">Repeat password</label>
+      <input id="lp2" type="password" autocomplete="new-password">
+    </div>
+    <div class="err" id="loginerr"></div>
+    <button class="btn pri" id="loginbtn">Sign in</button>
+  </form>
+</div>
+
+<dialog id="dlg"><form method="dialog" id="dlgform"></form></dialog>
+<div id="toast"></div>
+<script src="/static/v/__VERSION__/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+name: Build .deb and .rpm
+
+# Builds both packages, installs each on a real systemd host of the family it
+# targets, checks the UI answers and the seeded login works. On a tag with a
+# release, the packages are attached to it (the Proxmox script installs the
+# release .deb).
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: echo "value=$(tr -d ' \n' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Build the packages
+        run: |
+          set -eu
+          mkdir -p dist
+          for fmt in deb rpm; do
+            docker run --rm -v "$PWD":/w -w /w -e VERSION="${{ steps.version.outputs.value }}" \
+              goreleaser/nfpm:latest package -f packaging/nfpm.yaml -p "$fmt" -t dist/
+          done
+          ls -la dist/
+
+      - name: Check the package contains the real files
+        run: |
+          set -eu
+          mkdir -p /tmp/x && dpkg-deb -x dist/*.deb /tmp/x
+          for f in app.py VERSION static/index.html static/js/app.js static/css/app.css $(sed 's|^|mbm/|' mbm/FILES); do
+            cmp "/tmp/x/opt/mariadb-backup-manager/$f" "$f" || { echo "packaged $f differs"; exit 1; }
+          done
+          echo "the package matches the source"
+
+      - name: Install on Debian, Ubuntu, Rocky and Fedora
+        run: |
+          set -eu
+          test_one() {
+            base="$1"; fmt="$2"; setup="$3"; tag="systemd-$(echo "$base" | tr ':/' '--')"
+            echo "== $base =="
+            printf 'FROM %s\nRUN %s\nSTOPSIGNAL SIGRTMIN+3\nCMD ["/sbin/init"]\n' "$base" "$setup" > /tmp/Dockerfile.$tag
+            docker build -q -t "$tag" -f /tmp/Dockerfile.$tag /tmp >/dev/null
+            cid=$(docker run -d --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock "$tag")
+            for i in $(seq 30); do docker exec "$cid" systemctl is-system-running >/dev/null 2>&1 && break; sleep 2; done
+            if [ "$fmt" = deb ]; then
+              docker cp dist/*.deb "$cid":/root/p.deb
+              docker exec "$cid" sh -c 'apt-get update -q >/dev/null && apt-get install -y /root/p.deb'
+            else
+              docker cp dist/*.rpm "$cid":/root/p.rpm
+              docker exec "$cid" sh -c 'dnf -y install /root/p.rpm'
+            fi
+            ok=""
+            for i in $(seq 30); do
+              docker exec "$cid" curl -sf -o /dev/null http://127.0.0.1:8090/api/whoami && { ok=1; break; }
+              sleep 2
+            done
+            [ -n "$ok" ] || { docker exec "$cid" journalctl -u mariadb-backup-manager -n 30 --no-pager; exit 1; }
+            docker exec "$cid" sh -c '
+              PW=$(awk "/password/{print \$2}" /var/lib/mariadb-backup-manager/admin-credentials.txt)
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8090/api/login \
+                     -H "Content-Type: application/json" -H "X-MBM: 1" -d "{\"username\":\"admin\",\"password\":\"$PW\"}")
+              echo "   service=$(systemctl is-active mariadb-backup-manager) login=$code dump=$(mariadb-dump --version | cut -c1-40)"
+              [ "$code" = 200 ]'
+            docker rm -f "$cid" >/dev/null
+          }
+          APT='apt-get update -q && apt-get install -y --no-install-recommends systemd systemd-sysv dbus curl ca-certificates && rm -rf /var/lib/apt/lists/*'
+          test_one debian:bookworm deb "$APT"
+          test_one debian:trixie   deb "$APT"
+          test_one ubuntu:24.04    deb "$APT"
+          test_one rockylinux:9    rpm 'dnf -y install systemd epel-release && dnf clean all'
+          test_one fedora:41       rpm 'dnf -y install systemd && dnf clean all'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ steps.version.outputs.value }}
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          retention-days: 90
+
+      - name: Attach them to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "no release for $TAG -- the packages are on this run as artifacts"; exit 0
+          fi
+          have=$(gh release view "$TAG" --json assets --jq '.assets[].name' || true)
+          for f in dist/*.deb dist/*.rpm; do
+            printf '%s\n' "$have" | grep -qx "$(basename "$f")" || gh release upload "$TAG" "$f"
+          done
