@@ -1,0 +1,26 @@
+[Unit]
+Description=MariaDB Backup Manager web UI
+Documentation=https://github.com/avandeputte/mariadb-backup
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root so it can write backup folders anywhere you point it and use
+# the local socket's unix_socket login. To harden, create a dedicated user,
+# give it the data and backup folders, and set User= with systemctl edit.
+User=root
+Environment=MBM_DATA_DIR=/var/lib/mariadb-backup-manager
+Environment=MBM_DEFAULT_BACKUP_DIR=/var/backups/mariadb
+Environment=MBM_LISTEN=0.0.0.0
+Environment=MBM_PORT=8090
+# Changes belong here rather than in this file, which is replaced on upgrade:
+#   systemctl edit mariadb-backup-manager
+EnvironmentFile=-/etc/default/mariadb-backup-manager
+ExecStart=/usr/bin/python3 /opt/mariadb-backup-manager/app.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

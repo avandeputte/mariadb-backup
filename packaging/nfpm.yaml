@@ -1,0 +1,82 @@
+# Package definition for .deb and .rpm, built with nfpm (goreleaser/nfpm).
+#
+#   VERSION=$(cat VERSION) nfpm package -f packaging/nfpm.yaml -p deb -t dist/
+#   VERSION=$(cat VERSION) nfpm package -f packaging/nfpm.yaml -p rpm -t dist/
+#
+# Same layout as install.sh: the app in /opt/mariadb-backup-manager, settings
+# in /var/lib/mariadb-backup-manager, local backups by default in
+# /var/backups/mariadb, one systemd unit.
+#
+# The package is not called "mariadb-backup": Debian and Ubuntu already ship
+# a package of that name (Mariabackup, the physical backup tool).
+name: mariadb-backup-manager
+arch: all
+platform: linux
+version: ${VERSION}
+section: database
+priority: optional
+maintainer: avandeputte <avndptt@gmail.com>
+description: |
+  MariaDB Backup Manager -- a web UI that backs up MariaDB and Galera servers
+  on demand or on a schedule, to a local folder or Google Drive, keeps the
+  newest N backups, and restores exactly the databases, tables and users you
+  pick.
+vendor: avandeputte
+homepage: https://github.com/avandeputte/mariadb-backup
+license: GPL-3.0
+
+overrides:
+  deb:
+    depends:
+      - python3
+      - python3-flask
+      - python3-requests
+      - python3-waitress
+      # mariadb-dump and mariadb. Newer is better: a client older than the
+      # server can miss syntax the server writes.
+      - mariadb-client
+      - openssl
+      - curl
+  rpm:
+    # RHEL and Rocky carry python3-flask and python3-waitress in EPEL.
+    depends:
+      - python3
+      - python3-flask
+      - python3-requests
+      - python3-waitress
+      - mariadb
+      - openssl
+      - curl
+
+contents:
+  - src: ./app.py
+    dst: /opt/mariadb-backup-manager/app.py
+  - src: ./mbm/*.py
+    dst: /opt/mariadb-backup-manager/mbm/
+  - src: ./mbm/FILES
+    dst: /opt/mariadb-backup-manager/mbm/FILES
+  - src: ./static
+    dst: /opt/mariadb-backup-manager/static
+  - src: ./VERSION
+    dst: /opt/mariadb-backup-manager/VERSION
+  - src: ./install.sh
+    dst: /opt/mariadb-backup-manager/install.sh
+    file_info:
+      mode: 0755
+  - src: ./packaging/mariadb-backup-manager.service
+    dst: /usr/lib/systemd/system/mariadb-backup-manager.service
+  - src: ./README.md
+    dst: /usr/share/doc/mariadb-backup-manager/README.md
+  - dst: /var/lib/mariadb-backup-manager
+    type: dir
+    file_info:
+      mode: 0700
+  - dst: /var/backups/mariadb
+    type: dir
+    file_info:
+      mode: 0700
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh
+  postremove: ./packaging/postremove.sh

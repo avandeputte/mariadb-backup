@@ -1,0 +1,106 @@
+name: Build and publish the container image
+
+# Multi-architecture images on the GitHub Container Registry:
+#
+#   ghcr.io/<owner>/mariadb-backup:latest      the tip of main
+#   ghcr.io/<owner>/mariadb-backup:0.1.0       the contents of VERSION
+#   ghcr.io/<owner>/mariadb-backup:sha-abc123  one exact commit
+#
+# Rebuilt weekly without the layer cache so Debian security updates (and the
+# MariaDB client) do not go stale. A pull request that touches the image
+# builds it for amd64 and starts it, without publishing.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths:
+      - Dockerfile
+      - 'docker/**'
+      - .github/workflows/docker-publish.yml
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: echo "value=$(tr -d ' \n' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+        if: github.event_name != 'pull_request'
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/') && !contains(steps.version.outputs.value, '-')) }}
+            type=raw,value=${{ steps.version.outputs.value }}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=MariaDB Backup Manager
+            org.opencontainers.image.description=Scheduled MariaDB and Galera backups to a folder or Google Drive, with selective restore
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check the image starts and answers
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = pull_request ]; then platforms=linux/amd64; else platforms="linux/amd64 linux/arm64"; fi
+          echo "## Image contents" >> "$GITHUB_STEP_SUMMARY"
+          for platform in $platforms; do
+            docker run -d --name check --platform "$platform" -e MBM_ADMIN_PASSWORD=checkonly1 \
+              "${REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.value }}"
+            for i in $(seq 40); do
+              docker exec check curl -fsS http://127.0.0.1:8090/api/whoami >/dev/null 2>&1 && break
+              [ "$i" = 40 ] && { docker logs check; exit 1; }
+              sleep 2
+            done
+            code=$(docker exec check curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8090/api/login \
+                   -H 'Content-Type: application/json' -H 'X-MBM: 1' -d '{"username":"admin","password":"checkonly1"}')
+            [ "$code" = 200 ] || { echo "login returned $code"; exit 1; }
+            { echo "**$platform**"; echo; echo '```'
+              docker exec check sh -c '. /etc/os-release; echo "$PRETTY_NAME"'
+              docker exec check mariadb-dump --version
+              docker exec check python3 --version
+              echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+            docker rm -f check >/dev/null
+          done
